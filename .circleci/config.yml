@@ -1,26 +1,149 @@
-# Use the latest 2.1 version of CircleCI pipeline process engine.
-# See: https://circleci.com/docs/2.0/configuration-reference
 version: 2.1
+parameters:
+  prospect:
+    type: string
+    default: "thoughtworks"
+  run_create_infra_base:
+    type: boolean
+    default: false
+  run_create_infra_backstage:
+    type: boolean
+    default: false
+  run_destroy_infra_backstage:
+    type: boolean
+    default: false
 
-# Define a job to be invoked later in a workflow.
-# See: https://circleci.com/docs/2.0/configuration-reference/#jobs
 jobs:
-  say-hello:
-    # Specify the execution environment. You can specify an image from Dockerhub or use one of our Convenience Images from CircleCI's Developer Hub.
-    # See: https://circleci.com/docs/2.0/configuration-reference/#docker-machine-macos-windows-executor
+  lint-tf:
+    working_directory: /tmp/project
     docker:
-      - image: cimg/base:stable
-    # Add steps to the job
-    # See: https://circleci.com/docs/2.0/configuration-reference/#steps
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
     steps:
       - checkout
       - run:
-          name: "Say hello"
-          command: "echo Hello, World!"
+          name: check terraform code
+          command: |
+            cd ./terraform/demo_terraform_aws_shared
+            terraform init -input=false
+            terraform validate
+            cd ../demo_terraform_aws_lightsail
+            terraform init -input=false
+            ssh-keygen -t rsa -b 4096 -f "access-`terraform workspace show`" -P 'petname' -C "test@<< pipeline.parameters.prospect >>.com" -q -N ""
+            terraform validate
 
-# Invoke jobs via workflows
-# See: https://circleci.com/docs/2.0/configuration-reference/#workflows
+  create-backend:
+    working_directory: /tmp/project
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - checkout
+      - run:
+          name: create terraform backend infra
+          command: |
+            cd ./terraform/demo_terraform_aws_shared
+            terraform init -input=false
+            terraform plan -out tfapply-shared
+            terraform apply tfapply-shared
+            mv terraform.tf.example terraform.tf
+            terraform init -input=false -migrate-state -force-copy
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  plan-apply:
+    working_directory: /tmp/project
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - checkout
+      - run:
+          name: terraform init & plan
+          command: |
+            cd ./terraform/demo_terraform_aws_lightsail
+            mv -v terraform.tf.example terraform.tf
+            terraform init -input=false
+            terraform workspace select << pipeline.parameters.prospect >> || terraform workspace new << pipeline.parameters.prospect >>
+            ssh-keygen -t rsa -b 4096 -f "access-`terraform workspace show`" -P 'petname' -C "test@<< pipeline.parameters.prospect >>.com" -q -N ""
+            terraform plan -out tfapply-lightsail -var domain_name="`terraform workspace show`.demodx.gama.technology"
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+  apply:
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: terraform apply
+          command: |
+            cd ./terraform/demo_terraform_aws_lightsail
+            terraform workspace select << pipeline.parameters.prospect >>
+            terraform apply tfapply-lightsail
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  plan-destroy:
+    working_directory: /tmp/project
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - checkout
+      - run:
+          name: terraform destroy plan
+          command: |
+            cd ./terraform/demo_terraform_aws_lightsail
+            mv -v terraform.tf.example terraform.tf
+            terraform init -input=false
+            terraform workspace select << pipeline.parameters.prospect >> || terraform workspace new << pipeline.parameters.prospect >>
+            ssh-keygen -t rsa -b 4096 -f "access-`terraform workspace show`" -P 'petname' -C "test@<< pipeline.parameters.prospect >>.com" -q -N ""
+            terraform plan -destroy -out tfdestroy-lightsail
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  destroy:
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: terraform destroy
+          command: |
+            cd ./terraform/demo_terraform_aws_lightsail
+            terraform workspace select << pipeline.parameters.prospect >>
+            terraform apply tfdestroy-lightsail
+  
 workflows:
-  say-hello-workflow:
+  version: 2
+  lint:
     jobs:
-      - say-hello
+      - lint-tf
+  create-infra-base:
+    when: << pipeline.parameters.run_create_infra_base >>
+    jobs:
+      - create-backend
+  create-infra-backstage:
+    when: << pipeline.parameters.run_create_infra_backstage >>
+    jobs:
+      - plan-apply
+      - apply:
+          requires:
+            - plan-apply
+  destroy-infra-backstage:
+    when: << pipeline.parameters.run_destroy_infra_backstage >>
+    jobs:
+      - hold-destroy:
+          type: approval
+      - plan-destroy:
+          requires:
+            - hold-destroy
+      - destroy:
+          requires:
+            - plan-destroy
