@@ -12,7 +12,7 @@ terraform {
 }
 
 module "aws_static_website" {
-  source = "../demo_terraform_aws_static_website/module"
+  source = "../.."
   
   # This is the bucekt name that's releate the React App Name
   bucket_name = var.bucket_name
