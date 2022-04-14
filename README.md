@@ -1,6 +1,6 @@
-# EMPC Demo Backstage Infra
+# Demo Backstage Infra
 
-[![CircleCI](https://circleci.com/gh/twlabs/empc-demo-backstage-infra/tree/main.svg?style=svg&circle-token=ffa8fda3886c8a7b36785cfe9642466bae9068cd)](https://circleci.com/gh/twlabs/empc-demo-backstage-infra/tree/main)
+
 
 ## Overview
 
